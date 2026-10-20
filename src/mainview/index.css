@@ -1,26 +1,28 @@
-* {
-	box-sizing: border-box;
-	margin: 0;
-	padding: 0;
-}
-
+/* 3-panel layout: sidebar (folders) | note list | editor */
+* { box-sizing: border-box; margin: 0; padding: 0; }
 body {
-	font-family:
-		-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-	height: 100vh;
-	overflow: hidden;
+	font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+	height: 100vh; overflow: hidden; color: #1d1d1f; background: #fff;
 }
-
-.spike {
-	padding: 40px;
-}
-
-.spike h1 {
-	font-size: 1.4rem;
-	margin-bottom: 12px;
-}
-
-.spike p {
-	color: #555;
-	line-height: 1.6;
-}
+button { font: inherit; border: none; background: none; cursor: pointer; text-align: left; color: inherit; }
+.app { display: grid; grid-template-columns: 170px 250px 1fr; height: 100vh; }
+.sidebar, .note-list { border-right: 1px solid #e0e0e3; min-height: 0; }
+.sidebar { background: #f5f5f7; padding: 16px 10px; overflow-y: auto; }
+h2 { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; color: #6e6e73; margin-bottom: 8px; }
+.sidebar button { display: block; width: 100%; padding: 6px 10px; border-radius: 6px; margin-bottom: 2px; }
+.note-list { display: flex; flex-direction: column; }
+.note-list header { display: flex; align-items: center; justify-content: space-between; padding: 16px 14px 8px; }
+.note-list header h2 { margin-bottom: 0; }
+.new-note { font-size: 0.85rem; color: #0a66d0; }
+.note-list ul { list-style: none; overflow-y: auto; flex: 1; }
+.note-list li button { display: block; width: 100%; padding: 8px 14px; }
+.note-title { display: block; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.note-folder { display: block; font-size: 0.75rem; color: #6e6e73; }
+.sidebar button:hover, .note-list li button:hover { background: #e8e8ed; }
+.sidebar button.active, .note-list li button.active { background: #d6e6ff; font-weight: 600; }
+.editor { display: flex; flex-direction: column; padding: 18px 22px; min-width: 0; }
+.editor input { font: inherit; font-size: 1.2rem; font-weight: 600; border: none; outline: none; margin-bottom: 12px; }
+.editor textarea { font: inherit; line-height: 1.55; border: none; outline: none; resize: none; flex: 1; min-height: 0; }
+.editor footer { padding-top: 10px; }
+.editor .danger { color: #c0392b; padding: 5px 12px; border: 1px solid #e0b4b0; border-radius: 6px; }
+.editor .empty { margin: auto; color: #86868b; }

@@ -12,7 +12,7 @@ export default {
 		},
 		views: {
 			mainview: {
-				entrypoint: "src/mainview/index.tsx",
+				entrypoint: "src/mainview/main.tsx",
 			},
 		},
 		copy: {
