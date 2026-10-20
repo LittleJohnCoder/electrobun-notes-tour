@@ -1,147 +1,107 @@
 import { BrowserView, BrowserWindow, Utils, type RPCSchema } from "electrobun/bun";
-import { join } from "path";
-import { mkdirSync, existsSync, readdirSync, unlinkSync } from "fs";
+import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { join, dirname } from "node:path";
 
-// Store notes in app data directory
-const notesDir = join(Utils.paths.userData, "notes");
-if (!existsSync(notesDir)) {
-	mkdirSync(notesDir, { recursive: true });
-}
+// [TOUR §1] The bun process owns the filesystem: the whole store is one
+// human-readable JSON file in the OS app-data folder.
+const storePath = join(Utils.paths.userData, "notes.json");
 
-type Note = {
-	id: string;
-	title: string;
-	content: string;
-	updatedAt: string;
-};
+type Note = { id: string; folder: string; title: string; content: string; updatedAt: string };
 
+// [TOUR §3] The schema is the contract: 5 requests the webview may make and
+// 1 message the bun side may push. Rename anything here and TypeScript fails
+// on both sides of the bridge.
 type NotesRPC = {
 	bun: RPCSchema<{
 		requests: {
-			getNotes: {
-				params: {};
-				response: Note[];
-			};
-			getNote: {
-				params: { id: string };
-				response: Note | null;
-			};
-			saveNote: {
-				params: { id?: string; title: string; content: string };
-				response: { success: boolean; note: Note };
-			};
-			deleteNote: {
-				params: { id: string };
-				response: { success: boolean };
-			};
-			exportNote: {
-				params: { id: string };
-				response: { success: boolean; path?: string };
-			};
+			getNotes: { params: {}; response: Note[] };
+			getNote: { params: { id: string }; response: Note | null };
+			createNote: { params: { folder: string }; response: Note };
+			saveNote: { params: { id: string; title: string; content: string }; response: Note };
+			deleteNote: { params: { id: string }; response: { ok: boolean } };
 		};
 		messages: {};
 	}>;
 	webview: RPCSchema<{
 		requests: {};
-		messages: {};
+		messages: {
+			// [TOUR §5] bun → UI push: bun is the source of truth, so it announces
+			// mutations instead of the UI polling for them.
+			notesChanged: { reason: "save" | "create" | "delete" };
+		};
 	}>;
 };
+
+function loadStore(): Note[] {
+	try {
+		return JSON.parse(readFileSync(storePath, "utf8")) as Note[];
+	} catch {
+		return []; // first run: the file doesn't exist yet
+	}
+}
+
+function persist(notes: Note[]): void {
+	mkdirSync(dirname(storePath), { recursive: true }); // learner-proof: recreate a wiped app-data folder
+	notes.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+	writeFileSync(storePath, `${JSON.stringify(notes, null, 2)}\n`);
+}
 
 function generateId(): string {
 	return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 }
 
-function getNotePath(id: string): string {
-	return join(notesDir, `${id}.json`);
-}
-
-function loadNote(id: string): Note | null {
-	const path = getNotePath(id);
-	if (!existsSync(path)) return null;
-	try {
-		const data = Bun.file(path);
-		// Use synchronous read
-		const text = require("fs").readFileSync(path, "utf-8");
-		return JSON.parse(text) as Note;
-	} catch {
-		return null;
-	}
-}
-
-function loadAllNotes(): Note[] {
-	const files = readdirSync(notesDir).filter((f) => f.endsWith(".json"));
-	const notes: Note[] = [];
-	for (const file of files) {
-		const id = file.replace(".json", "");
-		const note = loadNote(id);
-		if (note) notes.push(note);
-	}
-	return notes.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-}
-
+// [TOUR §2] Every request from the webview lands on exactly one handler here.
+// Each handler has one job: createNote mints, saveNote mutates an existing id.
 const notesRPC = BrowserView.defineRPC<NotesRPC>({
 	maxRequestTime: 10000,
 	handlers: {
 		requests: {
-			getNotes: () => {
-				return loadAllNotes();
-			},
-			getNote: ({ id }) => {
-				return loadNote(id);
-			},
-			saveNote: async ({ id, title, content }) => {
-				const noteId = id || generateId();
+			getNotes: () => loadStore(),
+			getNote: ({ id }) => loadStore().find((n) => n.id === id) ?? null,
+			createNote: ({ folder }) => {
 				const note: Note = {
-					id: noteId,
-					title: title || "Untitled",
-					content,
+					id: generateId(),
+					folder,
+					title: "Untitled",
+					content: "",
 					updatedAt: new Date().toISOString(),
 				};
-				await Bun.write(getNotePath(noteId), JSON.stringify(note, null, 2));
-				return { success: true, note };
+				const notes = loadStore();
+				notes.push(note);
+				persist(notes);
+				notesRPC.send.notesChanged({ reason: "create" }); // [TOUR §5]
+				return note;
+			},
+			saveNote: ({ id, title, content }) => {
+				const notes = loadStore();
+				const note = notes.find((n) => n.id === id);
+				if (!note) throw new Error(`saveNote: no note with id ${id}`);
+				note.title = title;
+				note.content = content;
+				note.updatedAt = new Date().toISOString();
+				persist(notes);
+				notesRPC.send.notesChanged({ reason: "save" }); // [TOUR §5]
+				return note;
 			},
 			deleteNote: ({ id }) => {
-				const path = getNotePath(id);
-				if (existsSync(path)) {
-					unlinkSync(path);
-					return { success: true };
-				}
-				return { success: false };
-			},
-			exportNote: async ({ id }) => {
-				const note = loadNote(id);
-				if (!note) return { success: false };
-
-				const chosenPaths = await Utils.openFileDialog({
-					startingFolder: Bun.env["HOME"] || "/",
-					canChooseFiles: false,
-					canChooseDirectory: true,
-					allowsMultipleSelection: false,
-				});
-
-				if (chosenPaths[0] && chosenPaths[0] !== "") {
-					const exportPath = join(chosenPaths[0], `${note.title}.txt`);
-					await Bun.write(exportPath, note.content);
-					return { success: true, path: exportPath };
-				}
-				return { success: false };
+				const notes = loadStore();
+				const remaining = notes.filter((n) => n.id !== id);
+				if (remaining.length === notes.length) return { ok: false };
+				persist(remaining);
+				notesRPC.send.notesChanged({ reason: "delete" }); // [TOUR §5]
+				return { ok: true };
 			},
 		},
 		messages: {},
 	},
 });
 
-const mainWindow = new BrowserWindow({
+// [TOUR §1] One window, one webview, one rpc — the only door between the processes.
+new BrowserWindow({
 	title: "Notes",
 	url: "views://mainview/index.html",
 	rpc: notesRPC,
-	frame: {
-		width: 900,
-		height: 650,
-		x: 200,
-		y: 200,
-	},
+	frame: { width: 900, height: 650, x: 200, y: 200 },
 });
 
-console.log("Notes app started!");
-console.log(`Notes stored in: ${notesDir}`);
+console.log(`[notes-tour] store: ${storePath}`);
