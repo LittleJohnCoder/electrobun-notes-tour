@@ -42,24 +42,66 @@ export function onNotesChanged(cb: () => void): void {
 	notesChangedCb = cb;
 }
 
+// [TOUR §2] The RPC log: every crossing of the bridge appends one line here
+// and the overlay (RpcLog.tsx, toggled with Cmd+L) renders it — the tour
+// watches the real traffic instead of trusting prose about it.
+export const rpcLog: string[] = [];
+let onLogLine: (() => void) | null = null;
+export function onRpcLog(cb: () => void): void {
+	onLogLine = cb;
+}
+const show = (v: unknown) => JSON.stringify(v);
+
+async function logged<R>(
+	name: string,
+	params: object,
+	run: () => Promise<R>,
+	reply: (r: R) => string,
+): Promise<R> {
+	const t0 = performance.now();
+	const result = await run();
+	rpcLog.push(
+		`→ ${name}(${show(params)}) ${Math.max(1, Math.round(performance.now() - t0))}ms ${reply(result)}`,
+	);
+	if (rpcLog.length > 200) rpcLog.shift();
+	onLogLine?.();
+	return result;
+}
+
 export const rpc = Electroview.defineRPC<NotesRPC>({
 	maxRequestTime: 10000,
 	handlers: {
 		requests: {},
 		messages: {
-			notesChanged: () => notesChangedCb?.(),
+			// [TOUR §5] the push prints its ⇐ line the moment it lands, before
+			// React reacts to it.
+			notesChanged: (params) => {
+				rpcLog.push(`⇐ notesChanged(${show(params)})`);
+				onLogLine?.();
+				notesChangedCb?.();
+			},
 		},
 	},
 });
 
 export const electrobun = new Electrobun.Electroview({ rpc });
 
-// Typed request wrappers — the only door from UI code to the bun process.
+// [TOUR §4] This object is the webview's entire privileged surface. The
+// sandbox has no filesystem — try `Bun.write` right here and TypeScript
+// rejects it; a typed request to the bun process is the only fix.
+// [TOUR §2] All five requests go through `logged` in this one place, so the
+// log cannot drift from the real traffic.
 export const api = {
-	getNotes: () => electrobun.rpc!.request.getNotes({}),
-	getNote: (id: string) => electrobun.rpc!.request.getNote({ id }),
-	createNote: (folder: string) => electrobun.rpc!.request.createNote({ folder }),
-	deleteNote: (id: string) => electrobun.rpc!.request.deleteNote({ id }),
+	getNotes: () =>
+		logged("getNotes", {}, () => electrobun.rpc!.request.getNotes({}), (r) => `← ${r.length} notes`),
+	getNote: (id: string) =>
+		logged("getNote", { id }, () => electrobun.rpc!.request.getNote({ id}), (r) => `← ${r ? "Note" : "null"}`),
+	createNote: (folder: string) =>
+		logged("createNote", { folder }, () => electrobun.rpc!.request.createNote({ folder }), () => "← Note"),
+	deleteNote: (id: string) =>
+		logged("deleteNote", { id }, () => electrobun.rpc!.request.deleteNote({ id }), (r) => `← {ok:${r.ok}}`),
+	saveNote: (p: { id: string; title: string; content: string }) =>
+		logged("saveNote", p, () => electrobun.rpc!.request.saveNote(p), () => "← Note"),
 };
 
 // [TOUR §2] Typing is not a roundtrip per keystroke: edits queue a debounced
@@ -85,7 +127,7 @@ export async function flushSave(): Promise<void> {
 	pendingSave = null;
 	if (!save) return;
 	try {
-		await electrobun.rpc!.request.saveNote(save);
+		await api.saveNote(save);
 	} catch (error) {
 		// The note can vanish (deleted elsewhere) inside the debounce window.
 		console.error("saveNote failed:", error);
