@@ -87,8 +87,10 @@ export const rpc = Electroview.defineRPC<NotesRPC>({
 export const electrobun = new Electrobun.Electroview({ rpc });
 
 // [TOUR §4] This object is the webview's entire privileged surface. The
-// sandbox has no filesystem — try `Bun.write` right here and TypeScript
-// rejects it; a typed request to the bun process is the only fix.
+// sandbox has no filesystem — try `Bun.write` right here and the WEBVIEW
+// rejects it at runtime (`Bun` doesn't exist in a browser sandbox, and
+// @types/bun leaks the global, so the type checker won't stop you).
+// A typed request to the bun process is the only fix.
 // [TOUR §2] All five requests go through `logged` in this one place, so the
 // log cannot drift from the real traffic.
 export const api = {
